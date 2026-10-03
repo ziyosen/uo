@@ -1,106 +1,125 @@
-const express = require('express');
-const axios = require('axios');
-const cheerio = require('cheerio');
+import { Hono } from 'hono';
+import * as cheerio from 'cheerio';
 
-const app = express();
+const app = new Hono();
 const BASE_URL = 'https://rebahin.vidio.in.net';
 
-// Helper function untuk fetch HTML
+// Helper: Fetch & Parse HTML
 async function fetchHTML(url) {
     try {
-        const { data } = await axios.get(url, {
+        const response = await fetch(url, {
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
             }
         });
-        return cheerio.load(data);
+        if (!response.ok) return null;
+        const html = await response.text();
+        return cheerio.load(html);
     } catch (error) {
-        console.error("Error fetching URL:", error.message);
+        console.error('Fetch error:', error);
         return null;
     }
 }
 
-// 1. Endpoint Film Populer
-app.get('/populer', async (req, res) => {
-    const $ = await fetchHTML(BASE_URL);
-    if (!$\vert{}\vert{}$) return res.status(500).json({ error: 'Gagal mengambil data' });
+// Helper: Extract Movies dari layout grid/kisi
+function extractMovies($) {
+    const movies = [];
+    $('.kisi article.kartu').each((i, el) => {
+        const title = $(el).find('a.judul').text().trim();
+        const link = $(el).find('a.judul').attr('href');
+        const slug = link ? link.split('/film/')[1].replace('/', '') : '';
+        const poster = $(el).find('img').attr('src');
+        const rating = $(el).find('.nilai').text().trim();
+        const type = $(el).find('.tanda').text().trim() || 'Info/Trailer';
+        const info = $(el).find('.kartu-kaki').text().trim();
 
-    const results = [];
-    // Sesuaikan selector CSS (.item atau class card film di web target)
-    $('.item, .ml-item').each((_, element) => {
-        const title = $(element).find('.judul, h2, .lazyload').attr('alt') \vert{}\vert{}$(element).find('a').attr('title');
-        const link = $(element).find('a').attr('href');
-        const poster = $(element).find('img').attr('data-src') \vert{}\vert{}$(element).find('img').attr('src');
-        const rating = $(element).find('.rating, .score').text().trim();
-
-        if (title && link) {
-            results.push({ title, link, poster, rating });
-        }
+        movies.push({ title, slug, poster, rating, type, info });
     });
+    return movies;
+}
 
-    res.json({ success: true, data: results });
-});
-
-// 2. Endpoint Daftar Film (Semua / Halaman Film)
-app.get('/film', async (req, res) => {
-    const page = req.query.page || 1;
-    const targetUrl = `${BASE_URL}/page/${page}/`; // Sesuaikan struktur pagination web target
-    const $ = await fetchHTML(targetUrl);
-    if (!$) return res.status(500).json({ error: 'Gagal mengambil data' });
-
-    const results = [];
-    $('.item, .ml-item').each((_, element) => {
-        const title = $(element).find('a').attr('title');
-        const link = $(element).find('a').attr('href');
-        const poster = $(element).find('img').attr('data-src') \vert{}\vert{}$(element).find('img').attr('src');
-
-        if (title && link) {
-            results.push({ title, link, poster });
-        }
+// Route: Root / Beranda
+app.get('/', (c) => {
+    return c.json({
+        success: true,
+        message: 'Rebahin Unofficial API is running on Cloudflare Workers',
+        endpoints: [
+            '/terbaru?page=1',
+            '/populer?page=1',
+            '/film/:slug'
+        ]
     });
-
-    res.json({ success: true, page: Number(page), data: results });
 });
 
-// 3. Endpoint Film Terbaru
-app.get('/terbaru', async (req, res) => {
-    const $ = await fetchHTML(BASE_URL);
-    if (!$) return res.status(500).json({ error: 'Gagal mengambil data' });
+// Route: Film Terbaru
+app.get('/terbaru', async (c) => {
+    const page = c.req.query('page') || 1;
+    const url = page > 1 ? `${BASE_URL}/terbaru/page/${page}/` : `${BASE_URL}/terbaru/`;
+    
+    const $ = await fetchHTML(url);
+    if (!$) return c.json({ success: false, message: 'Gagal mengambil data' }, 500);
 
-    const results = [];
-    // Biasanya bagian terbaru ada di section khusus di halaman utama
-    $('.item, .ml-item').each((_, element) => {
-        const title = $(element).find('a').attr('title');
-        const link = $(element).find('a').attr('href');
-        const poster = $(element).find('img').attr('data-src') \vert{}\vert{}$(element).find('img').attr('src');
-
-        if (title && link) {
-            results.push({ title, link, poster });
-        }
-    });
-
-    res.json({ success: true, data: results });
+    const movies = extractMovies($);
+    return c.json({ success: true, page: Number(page), count: movies.length, data: movies });
 });
 
-// 4. Endpoint Daftar Genre
-app.get('/genre', async (req, res) => {
-    const $ = await fetchHTML(BASE_URL);
-    if (!$) return res.status(500).json({ error: 'Gagal mengambil data' });
+// Route: Film Populer
+app.get('/populer', async (c) => {
+    const page = c.req.query('page') || 1;
+    const url = page > 1 ? `${BASE_URL}/populer/page/${page}/` : `${BASE_URL}/populer/`;
+    
+    const $ = await fetchHTML(url);
+    if (!$) return c.json({ success: false, message: 'Gagal mengambil data' }, 500);
 
-    const genres = [];
-    // Ambil dari menu sidebar/dropdown genre
-    $('ul.genre-list a, .genres a, .menu-genre a').each((_, element) => {
-        const name = $(element).text().trim();
-        const link = $(element).attr('href');
-        if (name && link) {
-            genres.push({ name, link });
-        }
-    });
-
-    res.json({ success: true, data: genres });
+    const movies = extractMovies($);
+    return c.json({ success: true, page: Number(page), count: movies.length, data: movies });
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`API berjalan di port ${PORT}`);
+// Route: Detail Film
+app.get('/film/:slug', async (c) => {
+    const slug = c.req.param('slug');
+    const url = `${BASE_URL}/film/${slug}/`;
+
+    const $ = await fetchHTML(url);
+    if (!$) return c.json({ success: false, message: 'Gagal mengambil data halaman detail' }, 500);
+
+    try {
+        const title = $('h1').text().trim();
+        const poster = $('.film-kepala img.poster-kecil').attr('src');
+        const background = $('.film-sampul img').attr('src');
+        
+        const genres = [];
+        $('p.genre-baris a').each((i, el) => {
+            genres.push($(el).text().trim());
+        });
+
+        const fakta = [];
+        $('ul.fakta li').each((i, el) => {
+            fakta.push($(el).text().replace(/\s+/g, ' ').trim());
+        });
+
+        const synopsis = $('.sinopsis').text().trim();
+        const director = $('p.baris-info').filter((i, el) =>$(el).text().includes('Sutradara')).find('a').text().trim();
+
+        const cast = [];
+        $('.blok:contains("Pemeran") .tagar a').each((i, el) => {
+            cast.push({
+                name: $(el).text().trim(),
+                link: $(el).attr('href')
+            });
+        });
+
+        const watchLink = $('.aksi a.tombol.utama').attr('href');
+        const watchId = watchLink ? watchLink.replace('/nonton/', '').replace('/', '') : null;
+
+        return c.json({
+            success: true,
+            data: { title, poster, background, genres, fakta, director, synopsis, cast, watchId }
+        });
+    } catch (error) {
+        return c.json({ success: false, message: 'Error parsing detail data' }, 500);
+    }
 });
+
+export default app;
